@@ -1,12 +1,24 @@
-import argparse
 import os
+
+
+def _kaggle_xla_env() -> None:
+    if not (os.environ.get("KAGGLE_URL") or os.environ.get("KAGGLE_KERNEL_RUN_TYPE")):
+        return
+    if os.environ.get("ALU_KEEP_TPU_PROCESS_ADDRESSES", "").strip() in ("1", "true", "yes"):
+        return
+    os.environ.pop("TPU_PROCESS_ADDRESSES", None)
+
+
+_kaggle_xla_env()
+
+import argparse
 import random
 
 import numpy as np
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import CSVLogger, WandbLogger
 from torch.utils.data import DataLoader, Dataset
 
 import config
@@ -131,6 +143,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", type=str, default=None, metavar="CKPT")
     parser.add_argument("--accelerator", type=str, default=None, metavar="gpu|tpu|cpu")
+    parser.add_argument(
+        "--no-wandb",
+        action="store_true",
+        help="CSVLogger only (if wandb/TF + TPU fork breaks slice init on Kaggle)",
+    )
     args = parser.parse_args()
     if args.accelerator is not None:
         a = args.accelerator.lower().strip()
@@ -194,12 +211,17 @@ if __name__ == "__main__":
     if compile_ok:
         model.model = _maybe_compile(model.model)
 
-    wandb_logger = WandbLogger(
-        project=config.WANDB_PROJECT,
-        name=config.WANDB_RUN_NAME,
-        entity=os.environ.get("WANDB_ENTITY"),
-        log_model=config.WANDB_LOG_MODEL,
-    )
+    if args.no_wandb:
+        _log_root = os.path.join(_project_root, "lightning_logs")
+        os.makedirs(_log_root, exist_ok=True)
+        wandb_logger = CSVLogger(save_dir=_log_root, name="csv")
+    else:
+        wandb_logger = WandbLogger(
+            project=config.WANDB_PROJECT,
+            name=config.WANDB_RUN_NAME,
+            entity=os.environ.get("WANDB_ENTITY"),
+            log_model=config.WANDB_LOG_MODEL,
+        )
 
     _root = _project_root
     _ckpt_dir = _checkpoint_dir(_root)

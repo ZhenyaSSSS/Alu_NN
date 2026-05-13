@@ -1,0 +1,4 @@
+torch>=2.2
+pytorch-lightning>=2.2
+wandb>=0.16
+schedulefree>=1.4

@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.venv/
+venv/
+wandb/
+checkpoints/
+*.ckpt
+.DS_Store
+.idea/
+.vscode/
+*.log
+ALU_NN_full_code.txt
+tea_debug.log

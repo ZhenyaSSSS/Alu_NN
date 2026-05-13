@@ -1,0 +1,87 @@
+import torch
+
+SEED = 42
+
+WANDB_PROJECT = "ALU_NN"
+WANDB_RUN_NAME = None
+WANDB_LOG_MODEL = True
+WANDB_WATCH = "all"
+WANDB_WATCH_LOG_FREQ = 50
+WANDB_LOG_GRAPH = False
+
+USE_TORCH_COMPILE = False
+TORCH_COMPILE_MODE = "max-autotune"
+TORCH_COMPILE_FULLGRAPH = False
+TORCH_COMPILE_DYNAMIC = False
+
+LATENT_DIM = 512
+NUM_BITS = 32
+NUM_LAYERS_ENC = 7
+NUM_LAYERS_REFINE = 8
+NUM_DECODER_BLOCKS = 2
+
+SOLVER_TYPE = "deep_alu"
+SOLVER_DEEP_PIPE_MULT = 2
+SOLVER_GROUPED_BILINEAR_GROUPS = 8
+
+FLOAT32_MATMUL_PRECISION = "high"
+
+ACCELERATOR = "tpu"
+PL_DEVICES = 8
+PL_PRECISION_GPU = "bf16-mixed"
+PL_PRECISION_TPU = "32-true"
+DATALOADER_NUM_WORKERS_TPU = 0
+USE_TORCH_COMPILE_ON_TPU = False
+
+CHECKPOINT_DIR = None
+
+BATCH_SIZE = 8192 * 2
+LR = 1.5e-3
+LR_WARMUP_STEPS = 2500
+LR_COSINE_MIN_RATIO = 0.01
+
+USE_SCHEDULE_FREE = True
+SCHEDULE_FREE_VARIANT = "radam"
+SCHEDULE_FREE_WARMUP_STEPS = 2500
+SCHEDULE_FREE_RADAM_SILENT_SGD = True
+SCHEDULE_FREE_BETAS = (0.9, 0.999)
+SCHEDULE_FREE_R = 0.0
+SCHEDULE_FREE_WEIGHT_LR_POWER = 2.0
+WEIGHT_DECAY = 1e-2
+GRAD_CLIP = 1.0
+EPOCHS = 350
+STEPS_PER_EPOCH = 1000
+VAL_LIMIT_BATCHES = 50
+DATALOADER_NUM_WORKERS = 8
+NOISE_LEVEL = 0.04
+
+SWD_NUM_PROJECTIONS = 64
+SWD_MOMENT_WEIGHT = 0.1
+
+INFO_NCE_TAU = 0.1
+USE_INFO_NCE = False
+BETA_DECODER = 1.0
+
+LAMBDAS = {"info_nce": 1.0, "bce": 1.0, "wae": 0.1, "latent_reg": 1.0}
+
+QUIET_NAN = 2143289344
+
+OPERATIONS_MAP = {
+    "add": (0, False),
+    "sub": (1, False),
+    "mul": (2, False),
+    "div": (3, False),
+    "sin": (4, True),
+    "cos": (5, True),
+    "exp": (6, True),
+    "log": (7, True),
+}
+NUM_OPS = len(OPERATIONS_MAP)
+
+
+def get_bit_weights():
+    weights = torch.ones(32)
+    weights[0] = 10.0
+    weights[1:10] = 5.0
+    weights[10:32] = torch.linspace(1.0, 0.3, steps=22)
+    return weights / weights.mean()

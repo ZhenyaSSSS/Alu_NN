@@ -218,7 +218,7 @@ if __name__ == "__main__":
     devices = _pl_devices_value()
     if acc == "tpu":
         precision = os.environ.get("PL_PRECISION_TPU", "").strip() or str(
-            getattr(config, "PL_PRECISION_TPU", "32-true")
+            getattr(config, "PL_PRECISION_TPU", "bf16-mixed")
         )
     elif acc == "gpu":
         precision = os.environ.get("PL_PRECISION_GPU", "").strip() or str(

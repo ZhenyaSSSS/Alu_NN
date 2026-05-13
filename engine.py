@@ -1,4 +1,5 @@
 import math
+import os
 from typing import Any, Dict, Optional
 
 import torch
@@ -131,6 +132,36 @@ class NLAEngine(pl.LightningModule):
         self.register_buffer("bit_weights", config.get_bit_weights())
         self.automatic_optimization = True
 
+    def _synthetic_batch_size(self) -> int:
+        tr = self.trainer
+        if tr is None:
+            return int(getattr(config, "BATCH_SIZE", 16384))
+        acc = getattr(tr, "accelerator", None)
+        name = type(acc).__name__ if acc is not None else ""
+        if "TPU" in name or "XLA" in name:
+            ev = os.environ.get("ALU_BATCH_SIZE_TPU", "").strip()
+            if ev.isdigit():
+                return max(1, int(ev))
+            return int(getattr(config, "BATCH_SIZE_TPU_PER_CORE", config.BATCH_SIZE))
+        return int(config.BATCH_SIZE)
+
+    def _optimizer_lr(self) -> float:
+        tr = self.trainer
+        base = float(getattr(config, "LR", 1e-3))
+        if tr is None:
+            return base
+        acc = getattr(tr, "accelerator", None)
+        name = type(acc).__name__ if acc is not None else ""
+        if "TPU" not in name and "XLA" not in name:
+            return base
+        ev = os.environ.get("ALU_LR_TPU", "").strip()
+        if ev:
+            try:
+                return float(ev)
+            except ValueError:
+                pass
+        return float(getattr(config, "LR_TPU", base))
+
     def _optimizer0(self):
         try:
             opt = self.optimizers()
@@ -179,6 +210,11 @@ class NLAEngine(pl.LightningModule):
                 log_graph=getattr(config, "WANDB_LOG_GRAPH", False),
             )
         self._schedule_free_train()
+        if self.trainer is not None and self.trainer.global_rank == 0:
+            bs = self._synthetic_batch_size()
+            ws = self.trainer.world_size
+            lr = self._optimizer_lr()
+            print(f"[engine] batch/core={bs} cores={ws} global_samples/step≈{bs * ws} lr={lr}")
 
     def on_train_batch_start(self, batch, batch_idx):
         self._schedule_free_train()
@@ -218,7 +254,8 @@ class NLAEngine(pl.LightningModule):
         return z + noise
 
     def training_step(self, batch, batch_idx):
-        bits_A, bits_B, op_ids, bits_Target = generate_batch(config.BATCH_SIZE, self.device)
+        bs = self._synthetic_batch_size()
+        bits_A, bits_B, op_ids, bits_Target = generate_batch(bs, self.device)
 
         enc_A = self.model.encoder(bits_A)
         enc_B = self.model.encoder(bits_B)
@@ -287,7 +324,8 @@ class NLAEngine(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        bits_A, bits_B, op_ids, bits_Target = generate_batch(config.BATCH_SIZE, self.device)
+        bs = self._synthetic_batch_size()
+        bits_A, bits_B, op_ids, bits_Target = generate_batch(bs, self.device)
 
         logits = self(bits_A, bits_B, op_ids)
         pred_bits = (logits > 0).long()
@@ -359,7 +397,7 @@ class NLAEngine(pl.LightningModule):
                 return {
                     "optimizer": AdamWScheduleFree(
                         param_groups,
-                        lr=config.LR,
+                        lr=self._optimizer_lr(),
                         betas=betas,
                         weight_decay=0.0,
                         warmup_steps=max(0, warmup),
@@ -371,7 +409,7 @@ class NLAEngine(pl.LightningModule):
                 return {
                     "optimizer": RAdamScheduleFree(
                         param_groups,
-                        lr=config.LR,
+                        lr=self._optimizer_lr(),
                         betas=betas,
                         weight_decay=0.0,
                         r=r,
@@ -392,7 +430,7 @@ class NLAEngine(pl.LightningModule):
                 return {
                     "optimizer": AdamWScheduleFree(
                         param_groups,
-                        lr=config.LR,
+                        lr=self._optimizer_lr(),
                         betas=betas,
                         weight_decay=0.0,
                         warmup_steps=max(0, warmup),
@@ -404,7 +442,7 @@ class NLAEngine(pl.LightningModule):
         if use_sf and not _SCHEDULE_FREE_TYPES:
             print("[engine] schedulefree missing → AdamW + LambdaLR")
 
-        opt = torch.optim.AdamW(param_groups, lr=config.LR)
+        opt = torch.optim.AdamW(param_groups, lr=self._optimizer_lr())
         total = None
         if self.trainer is not None:
             total = getattr(self.trainer, "estimated_stepping_batches", None)

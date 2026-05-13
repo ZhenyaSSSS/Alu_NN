@@ -203,18 +203,29 @@ class NLAEngine(pl.LightningModule):
                 meta["cuda_version"] = torch.version.cuda
                 meta["cuda_device"] = torch.cuda.get_device_name(torch.cuda.current_device())
             self.logger.experiment.config.update(meta, allow_val_change=True)
-            self.logger.watch(
-                self.model,
-                log=config.WANDB_WATCH,
-                log_freq=config.WANDB_WATCH_LOG_FREQ,
-                log_graph=getattr(config, "WANDB_LOG_GRAPH", False),
-            )
+            accn = type(tr.accelerator).__name__ if tr and tr.accelerator else ""
+            xla = "TPU" in accn or "XLA" in accn
+            if not xla or bool(getattr(config, "WANDB_WATCH_TPU", False)):
+                self.logger.watch(
+                    self.model,
+                    log=config.WANDB_WATCH,
+                    log_freq=config.WANDB_WATCH_LOG_FREQ,
+                    log_graph=getattr(config, "WANDB_LOG_GRAPH", False),
+                )
         self._schedule_free_train()
         if self.trainer is not None and self.trainer.global_rank == 0:
             bs = self._synthetic_batch_size()
             ws = self.trainer.world_size
             lr = self._optimizer_lr()
             print(f"[engine] batch/core={bs} cores={ws} global_samples/step≈{bs * ws} lr={lr}")
+            trp = self.trainer
+            if trp and trp.accelerator:
+                an = type(trp.accelerator).__name__
+                if "TPU" in an or "XLA" in an:
+                    print(
+                        "[engine] TPU: first XLA compile + sanity val can take many minutes; then steps speed up.",
+                        flush=True,
+                    )
 
     def on_train_batch_start(self, batch, batch_idx):
         self._schedule_free_train()

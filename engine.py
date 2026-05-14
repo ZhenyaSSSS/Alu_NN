@@ -30,22 +30,24 @@ from bit_utils import bits_to_float
 
 def _special_float_accuracy(target_f: torch.Tensor, pred_f: torch.Tensor) -> torch.Tensor:
     m = ~torch.isfinite(target_f)
-    if not m.any():
-        return torch.tensor(float("nan"), device=target_f.device, dtype=torch.float32)
-    t, p = target_f[m], pred_f[m]
-    ok = (torch.isnan(t) & torch.isnan(p)) | (torch.isposinf(t) & torch.isposinf(p)) | (
-        torch.isneginf(t) & torch.isneginf(p)
-    )
-    return ok.float().mean()
+    ok = (torch.isnan(target_f) & torch.isnan(pred_f)) | (
+        torch.isposinf(target_f) & torch.isposinf(pred_f)
+    ) | (torch.isneginf(target_f) & torch.isneginf(pred_f))
+    correct = (ok & m).float().sum()
+    total = m.float().sum()
+    nan = torch.tensor(float("nan"), device=target_f.device, dtype=torch.float32)
+    return torch.where(total > 0, correct / total.clamp_min(1e-6), nan)
 
 
 def _mape_finite(target_f: torch.Tensor, pred_f: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     fin = torch.isfinite(target_f) & torch.isfinite(pred_f)
     nz = target_f.abs() > eps
     m = fin & nz
-    if not m.any():
-        return torch.tensor(float("nan"), device=target_f.device, dtype=torch.float32)
-    return ((pred_f[m] - target_f[m]).abs() / target_f[m].abs().clamp_min(eps)).mean()
+    diff = (pred_f - target_f).abs() / target_f.abs().clamp_min(eps)
+    sum_diff = (diff * m.float()).sum()
+    total = m.float().sum()
+    nan = torch.tensor(float("nan"), device=target_f.device, dtype=torch.float32)
+    return torch.where(total > 0, sum_diff / total.clamp_min(1e-6), nan)
 
 
 def _serializable_config() -> dict:
@@ -66,27 +68,32 @@ def _serializable_config() -> dict:
     return out
 
 
-def sota_swd_loss(z: torch.Tensor) -> torch.Tensor:
-    device = z.device
-    zf = z.float()
-    b, d = zf.shape
-    k = config.SWD_NUM_PROJECTIONS
+def mmd_imq_loss(z: torch.Tensor) -> torch.Tensor:
+    ss = int(getattr(config, "MMD_IMQ_SUB_SAMPLE", 1024))
+    n = z.size(0)
+    step = max(1, n // ss)
+    z_sub = z[::step][:ss].float()
+    ref = torch.randn_like(z_sub)
 
-    mean_loss = zf.mean(dim=0).pow(2).mean()
-    var_loss = (zf.var(dim=0, unbiased=False) - 1.0).pow(2).mean()
+    def sq_pairwise(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        x_sq = x.pow(2).sum(dim=-1, keepdim=True)
+        y_sq = y.pow(2).sum(dim=-1, keepdim=True)
+        xy = torch.matmul(x, y.t())
+        return (x_sq + y_sq.t() - 2.0 * xy).clamp_min(0.0)
 
-    projections = torch.randn(d, k, device=device, dtype=torch.float32)
-    projections = projections / projections.norm(dim=0, keepdim=True)
+    d_xx = sq_pairwise(z_sub, z_sub)
+    d_yy = sq_pairwise(ref, ref)
+    d_xy = sq_pairwise(z_sub, ref)
 
-    z_proj = torch.matmul(zf, projections).sort(dim=0)[0]
+    scales = tuple(getattr(config, "MMD_IMQ_SCALES", (0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0)))
+    dim = float(z.size(-1))
+    c = z_sub.new_tensor(scales).reshape(-1, 1, 1) * dim
 
-    p = torch.linspace(0.5 / b, 1.0 - 0.5 / b, b, device=device, dtype=torch.float32).unsqueeze(1)
-    t = (2.0 * p - 1.0).clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-    q = torch.erfinv(t) * math.sqrt(2.0)
-    target_proj = q.expand(-1, k)
+    def k_mean(dist_sq: torch.Tensor) -> torch.Tensor:
+        return (c / (c + dist_sq.unsqueeze(0))).sum(dim=0).mean()
 
-    swd = F.mse_loss(z_proj, target_proj)
-    return swd + config.SWD_MOMENT_WEIGHT * (mean_loss + var_loss)
+    mmd2 = k_mean(d_xx) + k_mean(d_yy) - 2.0 * k_mean(d_xy)
+    return mmd2.clamp_min(1e-6)
 
 
 def masked_infonce_loss(
@@ -299,7 +306,7 @@ class NLAEngine(pl.LightningModule):
 
         loss_latent_reg = F.smooth_l1_loss(pred_z.float(), enc_Target.detach().float())
 
-        loss_wae = sota_swd_loss(enc_Target)
+        loss_wae = mmd_imq_loss(enc_Target)
 
         loss = (
             config.LAMBDAS["bce"] * loss_bce
@@ -326,7 +333,7 @@ class NLAEngine(pl.LightningModule):
                 "train/bce_solver": bce_solver_mean,
                 "train/info_nce": loss_info,
                 "train/latent_reg": loss_latent_reg,
-                "train/wae_swd": loss_wae,
+                "train/wae_mmd": loss_wae,
                 "train/lr": lr_log,
             },
             prog_bar=True,

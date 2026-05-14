@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
     print(f"[train] Trainer: accelerator={acc!r} devices={devices!r} precision={precision!r}")
 
-    trainer = pl.Trainer(
+    trainer_kw: dict = dict(
         max_epochs=config.EPOCHS,
         accelerator=acc,
         devices=devices,
@@ -264,6 +264,19 @@ if __name__ == "__main__":
         deterministic=False,
         limit_val_batches=getattr(config, "VAL_LIMIT_BATCHES", 50),
     )
+    if acc == "tpu":
+        sv = os.environ.get("NUM_SANITY_VAL_STEPS", "").strip()
+        if sv.isdigit():
+            trainer_kw["num_sanity_val_steps"] = int(sv)
+        else:
+            trainer_kw["num_sanity_val_steps"] = int(getattr(config, "TPU_NUM_SANITY_VAL_STEPS", 0))
+        print(
+            "[train] Kaggle TPU: VM is killed if TPU stays idle >2h. "
+            "First XLA compile must finish before that — use smaller ALU_BATCH_SIZE_TPU if stuck.",
+            flush=True,
+        )
+
+    trainer = pl.Trainer(**trainer_kw)
 
     trainer.fit(
         model,

@@ -265,6 +265,8 @@ class NLAEngine(pl.LightningModule):
         return z + noise
 
     def training_step(self, batch, batch_idx):
+        if batch_idx == 0 and self.global_rank == 0:
+            print("[engine] training_step 0 start (XLA trace/compile…)", flush=True)
         bs = self._synthetic_batch_size()
         bits_A, bits_B, op_ids, bits_Target = generate_batch(bs, self.device)
 
